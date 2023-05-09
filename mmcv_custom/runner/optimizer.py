@@ -2,13 +2,17 @@
 import copy
 from collections import defaultdict
 from itertools import chain
-
 from torch.nn.utils import clip_grad
-
 from mmcv.utils import TORCH_VERSION, _BatchNorm, digit_version
 from ..dist_utils import allreduce_grads
 from ..fp16_utils import LossScaler, wrap_fp16_model
 from .hook import HOOKS, Hook
+
+import sys,time
+import numpy as np
+import torch
+
+import utils
 
 try:
     # If PyTorch version >= 1.6.0, torch.cuda.amp.GradScaler would be imported
@@ -30,7 +34,7 @@ class OptimizerHook(Hook):
         if len(params) > 0:
             return clip_grad.clip_grad_norm_(params, **self.grad_clip)
 
-    def after_train_iter(self, runner):
+    def after_train_iter(self, runner,t=1,s=1):
         runner.optimizer.zero_grad()
         runner.outputs['loss'].backward()
         if self.grad_clip is not None:
@@ -39,6 +43,21 @@ class OptimizerHook(Hook):
                 # Add grad norm to the logger
                 runner.log_buffer.update({'grad_norm': float(grad_norm)},
                                          runner.outputs['num_samples'])
+        if t>1:
+            for n,p in self.model.named_parameters():
+                if n in self.mask_back:
+                    p.grad.data*=self.mask_back[n]
+
+        # Compensate embedding gradients
+        for n,p in self.model.named_parameters():
+            if n.startswith('e'):
+                num=torch.cosh(torch.clamp(s*p.data,-thres_cosh,thres_cosh))+1
+                den=torch.cosh(p.data)+1
+                p.grad.data*=self.smax/s*num/den
+
+        # Apply step
+        torch.nn.utils.clip_grad_norm(self.model.parameters(),self.clipgrad)
+        self.optimizer.step()
         runner.optimizer.step()
 
 
