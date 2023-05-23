@@ -101,7 +101,7 @@ class YOLOXHead(BaseDenseHead, BBoxTestMixin):
         assert conv_bias == 'auto' or isinstance(conv_bias, bool)
         self.conv_bias = conv_bias
         self.use_sigmoid_cls = True
-        
+
         self.conv_cfg = conv_cfg
         self.norm_cfg = norm_cfg
         self.act_cfg = act_cfg
@@ -126,26 +126,7 @@ class YOLOXHead(BaseDenseHead, BBoxTestMixin):
             self.sampler = build_sampler(sampler_cfg, context=self)
 
         self.fp16_enabled = False
-
-        #
-
-        self.t=1 #t equals 1 when training task a; 
-                 #  equals 2 when training task b; 
-        self.embedding=torch.nn.Embedding(self.t,256)
-
-        self.gate=torch.nn.Sigmoid()
-
-        self.smax=400
-        self.mask_pre=None
-        self.mask_back=None
-
-        self.masks=None
-        #
-
-
         self._init_layers()
-
-
 
     def _init_layers(self):
         self.multi_level_cls_convs = nn.ModuleList()
@@ -224,27 +205,7 @@ class YOLOXHead(BaseDenseHead, BBoxTestMixin):
             tuple[Tensor]: A tuple of multi-level predication map, each is a
                 4D-tensor of shape (batch_size, 5+num_classes, height, width).
         """
-        #
-        task=torch.autograd.Variable(torch.LongTensor([self.t]).cuda(),volatile=False)
-        mask=self.model.mask(task,s=self.smax)
-        for i in range(len(mask)):
-            mask[i]=torch.autograd.Variable(mask[i].data.clone(),requires_grad=False)
-        if self.t==0:
-            self.mask_pre=mask
-        else:
-            for i in range(len(self.mask_pre)):
-                self.mask_pre[i]=torch.max(self.mask_pre[i],mask[i])
 
-        # Weights mask
-        self.mask_back={}
-        for n,_ in self.model.named_parameters():
-            vals=self.model.get_view_for(n,self.mask_pre)
-            if vals is not None:
-                self.mask_back[n]=1-vals
-        #
-
-        print(self.mask_back)
-        
         return multi_apply(self.forward_single, feats,
                            self.multi_level_cls_convs,
                            self.multi_level_reg_convs,
@@ -530,20 +491,3 @@ class YOLOXHead(BaseDenseHead, BBoxTestMixin):
         l1_target[:, :2] = (gt_cxcywh[:, :2] - priors[:, :2]) / priors[:, 2:]
         l1_target[:, 2:] = torch.log(gt_cxcywh[:, 2:] / priors[:, 2:] + eps)
         return l1_target
-
-    #
-    def criterion(self,outputs,targets,masks):
-        reg=0
-        count=0
-        if self.mask_pre is not None:
-            for m,mp in zip(masks,self.mask_pre):
-                aux=1-mp
-                reg+=(m*aux).sum()
-                count+=aux.sum()
-        else:
-            for m in masks:
-                reg+=m.sum()
-                count+=np.prod(m.size()).item()
-        reg/=count
-        return self.ce(outputs,targets)+self.lamb*reg,reg
-    #

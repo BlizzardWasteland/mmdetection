@@ -2,7 +2,9 @@
 import copy
 from collections import defaultdict
 from itertools import chain
+
 from torch.nn.utils import clip_grad
+
 from mmcv.utils import TORCH_VERSION, _BatchNorm, digit_version
 from ..dist_utils import allreduce_grads
 from ..fp16_utils import LossScaler, wrap_fp16_model
@@ -34,7 +36,8 @@ class OptimizerHook(Hook):
         if len(params) > 0:
             return clip_grad.clip_grad_norm_(params, **self.grad_clip)
 
-    def after_train_iter(self, runner,t=1,s=1):
+    def after_train_iter(self, runner):
+        '''batch'''
         runner.optimizer.zero_grad()
         runner.outputs['loss'].backward()
         if self.grad_clip is not None:
@@ -43,22 +46,47 @@ class OptimizerHook(Hook):
                 # Add grad norm to the logger
                 runner.log_buffer.update({'grad_norm': float(grad_norm)},
                                          runner.outputs['num_samples'])
-        if t>1:
+        
+        if runner.t==0:
+            runner.optimizer.step()
+        
+        else:
+            s=(runner.smax-1/runner.smax)*runner.iter/runner.max_iters+1/self.smax
+            
+            thres_cosh=50
+            thres_emb=6
+
+            prefix = runner.__class__.__name__
+            for name, module in runner.named_modules():
+                try:
+                    items = module._modules.items()
+                    assert(len(items))
+                    flag=0
+                    mask=None
+                    for k,v in module.named_parameters():
+                        if 'mask_back' in k:
+                            flag=1
+                            mask=v
+                            break
+                    if flag==1:
+                        for k,v in module.named_parameters():
+                            if 'mask' not in k:
+                                v.grad.data*=mask[0]
+                except:
+                    print(prefix+'.'+name, module)
+
             for n,p in self.model.named_parameters():
-                if n in self.mask_back:
-                    p.grad.data*=self.mask_back[n]
+                if 'embedding' in n:
+                    num=torch.cosh(torch.clamp(s*p.data,-thres_cosh,thres_cosh))+1
+                    den=torch.cosh(p.data)+1
+                    p.grad.data*=self.smax/s*num/den
 
-        # Compensate embedding gradients
-        for n,p in self.model.named_parameters():
-            if n.startswith('e'):
-                num=torch.cosh(torch.clamp(s*p.data,-thres_cosh,thres_cosh))+1
-                den=torch.cosh(p.data)+1
-                p.grad.data*=self.smax/s*num/den
+            runner.optimizer.step()
 
-        # Apply step
-        torch.nn.utils.clip_grad_norm(self.model.parameters(),self.clipgrad)
-        self.optimizer.step()
-        runner.optimizer.step()
+            for n,p in self.model.named_parameters():
+                if 'embedding' in n:
+                    p.data=torch.clamp(p.data,-thres_emb,thres_emb)
+        
 
 
 @HOOKS.register_module()

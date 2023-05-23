@@ -171,7 +171,7 @@ optimizer_config = dict(grad_clip=None)
 max_epochs = 300
 num_last_epochs = 15
 resume_from = None
-interval = 50
+interval = 1
 
 # learning policy
 lr_config = dict(
@@ -204,7 +204,7 @@ custom_hooks = [
         priority=49)
 ]
 # checkpoint_config = dict(interval=interval)
-checkpoint_config = dict(interval=50)
+checkpoint_config = dict(interval=1)
 evaluation = dict(
     save_best='auto',
     # The evaluation interval is 'interval' when running epoch is
@@ -215,6 +215,6 @@ evaluation = dict(
     interval=10,
     dynamic_intervals=[(max_epochs - num_last_epochs, 1)],
     metric='mAP')
-log_config = dict(interval=10)
+log_config = dict(interval=1)
 
 auto_scale_lr = dict(base_batch_size=64)
